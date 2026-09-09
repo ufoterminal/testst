@@ -1,0 +1,9 @@
+{
+  "name": "arc-readonly-screener",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node src/server.js", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@electric-sql/pglite": "0.5.8", "express": "4.21.1", "pg": "8.13.0", "viem": "2.21.19", "ws": "8.21.3" }
+}

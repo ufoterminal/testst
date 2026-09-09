@@ -1,0 +1,11 @@
+import {createPublicClient,fallback,http,parseAbiItem,decodeEventLog} from 'viem';
+import {CHAIN_ID,RPC_HTTP,USDC,DEX_FACTORIES} from './config.js';
+const arc={id:CHAIN_ID,name:'Arc',nativeCurrency:{name:'USDC',symbol:'USDC',decimals:18},rpcUrls:{default:{http:RPC_HTTP}}};
+export const client=createPublicClient({chain:arc,transport:fallback(RPC_HTTP.map(x=>http(x,{timeout:10000,retryCount:0}))) });
+export const poolCreated=parseAbiItem('event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)');
+export const swapEvent=parseAbiItem('event Swap(address indexed sender,address indexed recipient,int256 amount0,int256 amount1,uint160 sqrtPriceX96,uint128 liquidity,int24 tick)');
+export const erc20=[{type:'function',name:'name',stateMutability:'view',inputs:[],outputs:[{type:'string'}]},{type:'function',name:'symbol',stateMutability:'view',inputs:[],outputs:[{type:'string'}]},{type:'function',name:'decimals',stateMutability:'view',inputs:[],outputs:[{type:'uint8'}]},{type:'function',name:'totalSupply',stateMutability:'view',inputs:[],outputs:[{type:'uint256'}]},{type:'function',name:'balanceOf',stateMutability:'view',inputs:[{name:'owner',type:'address'}],outputs:[{type:'uint256'}]}];
+export async function exactBlockAt(block){const b=await client.getBlock({blockNumber:BigInt(block)});return Number(b.timestamp)}
+export async function findUsdcPools(from,to){const logs=[];for(const factory of DEX_FACTORIES){try{logs.push(...await client.getLogs({address:factory,events:[poolCreated],fromBlock:BigInt(from),toBlock:BigInt(to)}))}catch(e){console.log('[chain] factory scan',factory,e.message)}}return logs}
+export async function tokenInfo(address){const [name,symbol,decimals,total_supply]=await Promise.all(['name','symbol','decimals','totalSupply'].map(fn=>client.readContract({address,abi:erc20,functionName:fn}).catch(()=>null)));return {name:String(name||''),symbol:String(symbol||''),decimals:decimals==null?null:Number(decimals),total_supply:total_supply==null?null:String(total_supply)}}
+export async function tokenBalance(token,owner){return client.readContract({address:token,abi:erc20,functionName:'balanceOf',args:[owner]})}

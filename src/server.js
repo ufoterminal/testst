@@ -1,0 +1,26 @@
+import express from 'express';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {WebSocketServer} from 'ws';
+import {init,pool,storage,q} from './db.js';
+import {LAUNCHPADS} from './launchpads.js';
+import {syncExternal} from './providers.js';
+import {marketBundle,screener,searchTokens,candles,tokenDetail} from './api.js';
+import {startIndexer,state as indexState} from './indexer.js';
+const app=express();const root=path.dirname(fileURLToPath(import.meta.url));app.disable('x-powered-by');app.use((_,res,next)=>{res.set('access-control-allow-origin','*');next()});
+let lastSync=null,lastError=null,syncing=false;
+app.get('/health',(_,res)=>res.json({ok:true,storage,lastSync,lastError,indexer:indexState}));
+app.get('/api/launchpads',(_,res)=>res.json(LAUNCHPADS));
+app.get('/api/status',async(_,res)=>res.json({chainId:5042,storage,lastSync,lastError,tokens:(await q('SELECT COUNT(*)::int count FROM tokens'))[0].count,pools:(await q('SELECT COUNT(*)::int count FROM pools'))[0].count}));
+app.get('/api/screener',async(_,res)=>{try{res.json({rows:await screener(),generated_at:Math.floor(Date.now()/1000)})}catch(e){res.status(500).json({error:e.message})}});
+app.get('/api/search',async(req,res)=>{try{res.json({rows:await searchTokens(String(req.query.q||'')),generated_at:Math.floor(Date.now()/1000)})}catch(e){res.status(500).json({error:e.message})}});
+app.get('/api/candles/:address',async(req,res)=>{try{res.json(await candles(req.params.address,String(req.query.tf||'5m')))}catch(e){res.status(500).json({error:e.message})}});
+app.get('/api/token/:address',async(req,res)=>{try{const row=await tokenDetail(req.params.address);if(!row)return res.status(404).json({error:'not found'});res.json(row)}catch(e){res.status(500).json({error:e.message})}});
+app.get('/api/market/:address',async(req,res)=>{try{if(!/^0x[0-9a-f]{40}$/i.test(req.params.address))return res.status(400).json({error:'Invalid address'});const data=await marketBundle(req.params.address,String(req.query.tf||'1h'));if(!data)return res.status(404).json({error:'Token not found'});res.json(data)}catch(e){res.status(502).json({error:e.message})}});
+app.use(express.static(path.join(root,'..','public')));
+app.get('/token/:address',(_,res)=>res.sendFile(path.join(root,'..','public','token.html')));
+await init();
+const port=Number(process.env.PORT||3000);const server=app.listen(port,()=>console.log(`[http] http://localhost:${port}`));const wss=new WebSocketServer({server,path:'/live'});
+async function runSync(){if(syncing)return;syncing=true;try{const status=await syncExternal();lastSync=Math.floor(Date.now()/1000);const failed=status.filter(s=>!s.ok);lastError=failed.length?failed.map(s=>`${s.id}: ${s.error}`).join('; '):null;for(const s of status)console.log('[provider]',s.id,s.ok?'ok':s.error)}catch(e){lastError=e.message}finally{syncing=false}}
+runSync();if(process.env.ENABLE_INDEXER==='true')startIndexer();setInterval(runSync,60000).unref();setInterval(async()=>{if(!wss.clients.size)return;try{const payload=JSON.stringify({type:'screener',rows:await screener()});for(const c of wss.clients)if(c.readyState===1)c.send(payload)}catch(e){console.log('[ws]',e.message)}},10000).unref();
+process.on('SIGINT',async()=>{wss.close();server.close();await pool.end();process.exit(0)});process.on('SIGTERM',async()=>{wss.close();server.close();await pool.end();process.exit(0)});
